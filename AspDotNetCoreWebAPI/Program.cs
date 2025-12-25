@@ -15,10 +15,15 @@ internal class Program
         // Learn more about configuring Swagger/OpenAPI at https://aka.ms/aspnetcore/swashbuckle
         builder.Services.AddEndpointsApiExplorer();
         builder.Services.AddSwaggerGen();
-        builder.Services.AddDbContext<ShopContext>(options =>
+        var connectionString = builder.Configuration.GetConnectionString("DefaultConnection");
+        if (string.IsNullOrEmpty(connectionString))
         {
-            options.UseInMemoryDatabase("Shop");
-        });
+            throw new InvalidOperationException("Connection string 'DefaultConnection' is not configured. Set it in appsettings.json to use LocalDB.");
+        }
+
+        builder.Services.AddDbContext<ShopContext>(options =>
+        //options.UseInMemoryDatabase("Shop");
+        options.UseSqlServer(connectionString));
 
         var app = builder.Build();
 
@@ -38,7 +43,8 @@ internal class Program
         using (var scope = app.Services.CreateScope())
         {
             var db = scope.ServiceProvider.GetRequiredService<ShopContext>();
-            await db.Database.EnsureCreatedAsync();
+            // Apply any pending migrations and create the database if it does not exist
+            await db.Database.MigrateAsync();
         }
 
         app.MapGet("/products", async (ShopContext _context) =>
