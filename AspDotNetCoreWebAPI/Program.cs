@@ -1,6 +1,12 @@
 using AspDotNetCoreWebAPI.Models;
+using AspDotNetCoreWebAPI.Models.Dto;
+using AspDotNetCoreWebAPI.Models.HealthChecks;
+using AspDotNetCoreWebAPI.Repositories;
 using Microsoft.AspNetCore.Http.HttpResults;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Diagnostics.HealthChecks;
+using Serilog;
+using System.Linq;
 using System.Threading.Tasks;
 
 internal class Program
@@ -9,21 +15,35 @@ internal class Program
     {
         var builder = WebApplication.CreateBuilder(args);
 
-        // Add services to the container.
+        // Configure Serilog from configuration (appsettings)
+        Log.Logger = new LoggerConfiguration()
+            .ReadFrom.Configuration(builder.Configuration)
+            .Enrich.FromLogContext()
+            .WriteTo.Console()
+            .CreateLogger();
 
+        builder.Host.UseSerilog();
+
+        // Add services to the container.
         builder.Services.AddControllers();
+
+        // Health checks
+        builder.Services
+            .AddHealthChecks()
+            .AddCheck<DatabaseHealthCheck>("database");
+
+        // Register repository
+        builder.Services.AddScoped<IProductRepository, ProductRepository>();
+
         // Learn more about configuring Swagger/OpenAPI at https://aka.ms/aspnetcore/swashbuckle
         builder.Services.AddEndpointsApiExplorer();
         builder.Services.AddSwaggerGen();
-        var connectionString = builder.Configuration.GetConnectionString("DefaultConnection");
-        if (string.IsNullOrEmpty(connectionString))
-        {
-            throw new InvalidOperationException("Connection string 'DefaultConnection' is not configured. Set it in appsettings.json to use LocalDB.");
-        }
 
+        var connectionString = builder.Configuration["ConnectionStrings:DefaultConnection"];
+      
         builder.Services.AddDbContext<ShopContext>(options =>
-        //options.UseInMemoryDatabase("Shop");
-        options.UseSqlServer(connectionString));
+            options.UseSqlServer(connectionString)
+        );
 
         var app = builder.Build();
 
@@ -33,6 +53,8 @@ internal class Program
             app.UseSwagger();
             app.UseSwaggerUI();
         }
+
+        app.UseSerilogRequestLogging(); // structured request logging
 
         app.UseHttpsRedirection();
 
@@ -47,15 +69,53 @@ internal class Program
             await db.Database.MigrateAsync();
         }
 
+        // Map health endpoints
+        app.MapHealthChecks("/health");
+        // Readiness endpoint (same in this simple example)
+        app.MapHealthChecks("/health/ready");
+
         app.MapGet("/products", async (ShopContext _context) =>
-            await _context.Products.ToArrayAsync()
-        );
+        {
+            var products = await _context.Products
+                .Include(p => p.Category)
+                .ToArrayAsync();
+
+            var dtos = products.Select(p => new ProductDto
+            {
+                Id = p.Id,
+                Sku = p.Sku,
+                Name = p.Name,
+                Description = p.Description,
+                Price = p.Price,
+                IsAvailable = p.IsAvailable,
+                CategoryId = p.CategoryId,
+                CategoryName = p.Category?.Name
+            });
+
+            return Results.Ok(dtos);
+        });
 
         app.MapGet("/products/{id}", async (int id, ShopContext _context) =>
         {
-            var product = await _context.Products.FindAsync(id);
+            var product = await _context.Products
+                .Include(p => p.Category)
+                .FirstOrDefaultAsync(p => p.Id == id);
+
             if (product == null) return Results.NotFound();
-            return Results.Ok(product);
+
+            var dto = new ProductDto
+            {
+                Id = product.Id,
+                Sku = product.Sku,
+                Name = product.Name,
+                Description = product.Description,
+                Price = product.Price,
+                IsAvailable = product.IsAvailable,
+                CategoryId = product.CategoryId,
+                CategoryName = product.Category?.Name
+            };
+
+            return Results.Ok(dto);
         });
 
         app.Run();

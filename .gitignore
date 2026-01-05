@@ -141,6 +141,10 @@ _ReSharper*/
 # TeamCity is a build add-in
 _TeamCity*
 
+# Test results
+TestResults/
+*.trx
+
 # DotCover is a Code Coverage Tool
 *.dotCover
 
